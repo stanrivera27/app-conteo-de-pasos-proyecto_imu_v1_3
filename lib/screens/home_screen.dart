@@ -62,18 +62,18 @@ class _HomeScreenState extends State<HomeScreen>
                   // Header moderno
                   SliverToBoxAdapter(
                     child: ModernHeader(
-                      isRunning: _controller.sensorManager.isRunning,
+                      isRunning: _controller.isRunning,
                       pulseAnimation: _controller.pulseAnimation,
-                      frequency: _controller.sensorManager.frequency,
+                      frequency: _controller.globalSensorManager.sensorManager?.frequency ?? 0.0,
                     ),
                   ),
 
                   // Control de grabación
                   SliverToBoxAdapter(
                     child: RecordingControls(
-                      isRunning: _controller.sensorManager.isRunning,
+                      isRunning: _controller.isRunning,
                       onToggleSensors: _controller.toggleSensors,
-                      dataProcessor: _controller.dataProcessor,
+                      dataProcessor: _controller.dataProcessor ?? _controller.globalSensorManager.dataProcessor!,
                       onDataSaved: _onDataSaved,
                     ),
                   ),
@@ -103,17 +103,17 @@ class _HomeScreenState extends State<HomeScreen>
     switch (_controller.uiState.selectedTabIndex) {
       case 0:
         return SensorSection(
-          sensorManager: _controller.sensorManager,
+          sensorManager: _controller.globalSensorManager.sensorManager!,
         );
       case 1:
         return AnalysisSection(
-          dataProcessor: _controller.dataProcessor,
-          sensorManager: _controller.sensorManager,
+          dataProcessor: _controller.dataProcessor ?? _controller.globalSensorManager.dataProcessor!,
+          sensorManager: _controller.globalSensorManager.sensorManager!,
         );
       case 2:
         return GraphSection(
-          dataProcessor: _controller.dataProcessor,
-          sensorManager: _controller.sensorManager,
+          dataProcessor: _controller.dataProcessor ?? _controller.globalSensorManager.dataProcessor!,
+          sensorManager: _controller.globalSensorManager.sensorManager!,
           availableWindows: _controller.uiState.availableWindows,
           selectedWindowIndex: _controller.uiState.selectedWindowIndex,
           onWindowSelected: _controller.updateSelectedWindow,
@@ -122,7 +122,7 @@ class _HomeScreenState extends State<HomeScreen>
         );
       default:
         return SensorSection(
-          sensorManager: _controller.sensorManager,
+          sensorManager: _controller.globalSensorManager.sensorManager!,
         );
     }
   }

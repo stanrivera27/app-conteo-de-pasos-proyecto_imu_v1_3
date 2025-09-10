@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
-import 'package:proyecto_imu_v1_3/sensor/sensor_manager.dart';
+import 'package:flutter/foundation.dart';
+import 'package:proyecto_imu_v1_3/sensor/global_sensor_manager.dart';
 import 'package:proyecto_imu_v1_3/sensor/data/sensor_processor.dart';
+import 'package:proyecto_imu_v1_3/models/sensor_states.dart';
 import '../models/ui_state.dart';
 
 class HomeController extends ChangeNotifier {
-  late final SensorManager _sensorManager;
-  late final DataProcessor _dataProcessor;
+  late final GlobalSensorManager _globalSensorManager;
   late AnimationController _pulseAnimationController;
   late AnimationController _fadeAnimationController;
   late Animation<double> _pulseAnimation;
@@ -14,19 +15,26 @@ class HomeController extends ChangeNotifier {
   UIState _uiState = const UIState();
   
   // Getters
-  SensorManager get sensorManager => _sensorManager;
-  DataProcessor get dataProcessor => _dataProcessor;
+  GlobalSensorManager get globalSensorManager => _globalSensorManager;
+  DataProcessor? get dataProcessor => _globalSensorManager.dataProcessor;
   UIState get uiState => _uiState;
   Animation<double> get pulseAnimation => _pulseAnimation;
   Animation<double> get fadeAnimation => _fadeAnimation;
+  
+  // Sensor state getters
+  bool get isRunning => _globalSensorManager.isRunning;
+  SensorState get sensorState => _globalSensorManager.sensorState;
+  PositionState get positionState => _globalSensorManager.positionState;
+  bool get isManagerInitialized => _globalSensorManager.isInitialized;
 
   // Inicialización
   void initialize(TickerProvider vsync) {
-    _dataProcessor = DataProcessor();
-    _sensorManager = SensorManager(
-      onUpdate: _onSensorDataUpdate,
-      dataProcessor: _dataProcessor,
-    );
+    // Initialize global sensor manager
+    _globalSensorManager = GlobalSensorManager.getInstance();
+    _globalSensorManager.initialize();
+    
+    // Add listener for global sensor updates
+    _globalSensorManager.addListener(_onGlobalSensorUpdate);
 
     // Animaciones
     _pulseAnimationController = AnimationController(
@@ -65,16 +73,23 @@ class HomeController extends ChangeNotifier {
   }
 
   void toggleSensors() {
-    _sensorManager.toggleSensors();
-    notifyListeners();
+    if (_globalSensorManager.isInitialized) {
+      _globalSensorManager.toggleSensors();
+      notifyListeners();
+    } else {
+      debugPrint('Cannot toggle sensors: GlobalSensorManager not initialized');
+    }
   }
 
-  void _onSensorDataUpdate() {
-    final newWindowCount = _dataProcessor.matrizsignalfiltertotal.length;
-    if (newWindowCount > _uiState.availableWindows.length) {
-      _uiState = _uiState.copyWith(
-        availableWindows: List.generate(newWindowCount, (index) => index),
-      );
+  void _onGlobalSensorUpdate() {
+    final dataProcessor = _globalSensorManager.dataProcessor;
+    if (dataProcessor != null) {
+      final newWindowCount = dataProcessor.matrizsignalfiltertotal.length;
+      if (newWindowCount > _uiState.availableWindows.length) {
+        _uiState = _uiState.copyWith(
+          availableWindows: List.generate(newWindowCount, (index) => index),
+        );
+      }
     }
     notifyListeners();
   }
@@ -84,7 +99,10 @@ class HomeController extends ChangeNotifier {
   void dispose() {
     _pulseAnimationController.dispose();
     _fadeAnimationController.dispose();
-    _sensorManager.dispose();
+    
+    // Remove listener from global sensor manager
+    _globalSensorManager.removeListener(_onGlobalSensorUpdate);
+    
     super.dispose();
   }
 }

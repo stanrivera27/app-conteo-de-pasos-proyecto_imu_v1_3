@@ -23,12 +23,14 @@ import '../models/poi.dart';
 
 //para unificar con cesar
 import '../sensor/data/conteopasostexteo.dart';
-import '../sensor/optimized_sensor_manager.dart';
+import '../sensor/global_sensor_manager.dart';
 import '../sensor/data/sensor_processor.dart';
 import '../widgets/graphbuilder.dart';
 import '../sensor/guardar/savedata.dart';
 import '../utils/background_processor.dart';
 import '../utils/performance_monitor.dart';
+import '../utils/map_grid_converter.dart';
+import '../models/sensor_states.dart';
 
 // Importación para navegación
 import 'home_screen.dart';
@@ -168,11 +170,17 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   List<POI> pointsOfInterest = []; // Todos los POIs desde el JSON
   List<POI> visiblePOIs = []; //Lista de POIS cercanos a la ruta
 
-  //Proyecto cesar - Optimized - Use nullable for safer initialization
-  OptimizedSensorManager? _sensorManager;
-  DataProcessor? _dataProcessor;
+  // Global sensor manager integration
+  GlobalSensorManager? _globalSensorManager;
   final GraphBuilder _graphBuilder = GraphBuilder();
   bool showgraph = false;
+  
+  // Arrow positioning and animation
+  // ArrowState? _currentArrowState;
+  // late MapGridConverter _gridConverter;
+  LatLng? _arrowStartPosition;
+  // List<ArrowState> _arrowPath = [];
+  Timer? _arrowUpdateTimer;
 
   //para cuadros de texto
   int _stepCount = 0;
@@ -204,13 +212,16 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
       // Step 3: Load POIs (Optional)
       await _initializePOIs();
       
-      // Step 4: Initialize sensors (Optional)
-      await _initializeSensors();
+      // Step 4: Initialize global sensor manager (Optional but important)
+      await _initializeGlobalSensorManager();
       
-      // Step 5: Initialize animations (Optional)
+      // Step 5: Initialize grid converter
+      await _initializeGridConverter();
+      
+      // Step 6: Initialize animations (Optional)
       await _initializeAnimations();
       
-      // Step 6: Initialize background processing
+      // Step 7: Initialize background processing
       await _initializeBackgroundProcessing();
       
       _initContext.mapCreated = true;
@@ -315,31 +326,49 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     }
   }
   
-  Future<void> _initializeSensors() async {
+  Future<void> _initializeGlobalSensorManager() async {
     try {
-      _dataProcessor = DataProcessor();
-      _sensorManager = OptimizedSensorManager(
-        onUpdate: _onSensorDataUpdate,
-        dataProcessor: _dataProcessor!,
-      );
+      _globalSensorManager = GlobalSensorManager.getInstance();
+      _globalSensorManager!.initialize();
+      
+      // Add listener for global sensor updates
+      _globalSensorManager!.addListener(_onGlobalSensorUpdate);
+      
+      // Start arrow update timer
+      _arrowUpdateTimer = Timer.periodic(const Duration(milliseconds: 200), (timer) {
+        _updateArrowPosition();
+      });
+      
       _initContext.sensorsAvailable = true;
-      debugPrint('OptimizedSensorManager initialized successfully');
+      debugPrint('GlobalSensorManager initialized successfully');
     } catch (e) {
-      _initContext.addError('Sensor initialization failed: $e');
-      _sensorManager = null;
-      _dataProcessor = null;
+      _initContext.addError('Global sensor manager initialization failed: $e');
       // Continue without sensors - not critical
+    }
+  }
+  
+  Future<void> _initializeGridConverter() async {
+    try {
+      // _gridConverter = MapGridConverter(
+      //   startBounds: startBounds,
+      //   endBounds: endBounds,
+      //   fixedRows: numRows,
+      // );
+      debugPrint('Grid converter initialization skipped (not implemented)');
+    } catch (e) {
+      _initContext.addError('Grid converter initialization failed: $e');
+      debugPrint('WARNING: Grid converter initialization failed: $e');
     }
   }
   
   Future<void> _initializeAnimations() async {
     try {
       // Initialize shared animation controller for POI icons
-      if (mounted) {
-        OptimizedAnimatedPOIIcon.initSharedController(this);
-      }
+      // if (mounted) {
+      //   OptimizedAnimatedPOIIcon.initSharedController(this);
+      // }
       _initContext.animationsEnabled = true;
-      debugPrint('Animations initialized successfully');
+      debugPrint('Animations initialization skipped (not implemented)');
     } catch (e) {
       _initContext.addError('Animation initialization failed: $e');
       _initContext.animationsEnabled = false;
@@ -437,54 +466,125 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     }
   }
 
-  //Proyecto Cesar - Optimized
+  //Proyecto Cesar - Global Sensor Manager
   @override
   void dispose() {
     try {
-      _sensorManager?.dispose();
+      // Remove listener from global sensor manager
+      _globalSensorManager?.removeListener(_onGlobalSensorUpdate);
+      
       _accelSub?.cancel();
       _magSub?.cancel();
       _gyroSubscription?.cancel();
       _compassUpdateTimer?.cancel();
+      _arrowUpdateTimer?.cancel();
+      
       BackgroundProcessor.instance.dispose();
       PerformanceMonitor.instance.dispose();
       
       // Dispose shared animation controller
-      OptimizedAnimatedPOIIcon.disposeSharedController();
+      // OptimizedAnimatedPOIIcon.disposeSharedController();
     } catch (e) {
       debugPrint('Error in dispose: $e');
     }
     super.dispose();
   }
-  // Esta función se llama cada vez que hay una actualización en los sensores - Optimized
-  void _onSensorDataUpdate() {
-    // Record UI update for performance monitoring
-    if (kDebugMode) {
-      PerformanceMonitor.instance.recordUIUpdate();
+  
+  // Global sensor data update handler
+  void _onGlobalSensorUpdate() {
+    _updateStepCountAndDistance();
+    if (mounted) {
+      setState(() {});
     }
-    setState(() {});  // Llamamos a setState para redibujar la UI
   }
-
-  // Callback for performance updates from OptimizedSensorManager
-  void _onPerformanceUpdate() {
-    if (kDebugMode) {
-      final metrics = _sensorManager?.getPerformanceMetrics();
-      if (metrics != null) {
-        debugPrint('Sensor Performance - Frequency: ${metrics['frequency']?.toStringAsFixed(1)}Hz, '
-            'Health: ${_sensorManager?.getSensorHealthStatus()}');
+  
+  // Update step count and distance from global sensor manager
+  void _updateStepCountAndDistance() {
+    if (_globalSensorManager == null) return;
+    
+    final sensorState = _globalSensorManager!.sensorState;
+    _stepCount = sensorState.stepCount;
+    _distanceMeters = sensorState.totalDistance;
+    _isCountingSteps = sensorState.isRunning;
+  }
+  
+  // Update arrow position based on global sensor data
+  void _updateArrowPosition() {
+    // Temporary disabled - requires ArrowState and MapGridConverter implementation
+    /*
+    if (_globalSensorManager == null || !_globalSensorManager!.isRunning || _arrowStartPosition == null) {
+      return;
+    }
+    
+    try {
+      final positionState = _globalSensorManager!.positionState;
+      
+      if (positionState.isValid && positionState.accuracy > 0.1) {
+        // Calculate new arrow state with smooth animation
+        final newArrowState = _gridConverter.calculateArrowState(
+          positionState,
+          _arrowStartPosition!,
+        );
+        
+        // Apply smooth transition if there's a previous arrow state
+        if (_currentArrowState != null && newArrowState.isVisible) {
+          // Smooth position transition
+          final smoothPosition = ArrowAnimationHelper.calculateSmoothPosition(
+            _currentArrowState!.position,
+            newArrowState.position,
+            0.3, // Lerp factor for smooth movement
+          );
+          
+          // Smooth rotation transition
+          final smoothRotation = ArrowAnimationHelper.calculateSmoothRotation(
+            _currentArrowState!.rotation,
+            newArrowState.rotation,
+            0.4, // Lerp factor for rotation
+          );
+          
+          // Calculate scale based on movement speed
+          final currentSpeed = _globalSensorManager!.currentSpeed;
+          final animatedScale = ArrowAnimationHelper.calculateScaleFromSpeed(currentSpeed);
+          
+          // Create smoothed arrow state
+          _currentArrowState = newArrowState.copyWith(
+            position: smoothPosition,
+            rotation: smoothRotation,
+            scale: animatedScale,
+          );
+        } else {
+          // First arrow or not visible, use direct state
+          _currentArrowState = newArrowState;
+        }
+        
+        // Add to arrow path for trail visualization
+        if (_currentArrowState != null && _currentArrowState!.isVisible) {
+          // Only add to path if position has changed significantly
+          final shouldAddToPath = _arrowPath.isEmpty ||
+              ArrowAnimationHelper.calculateSmoothPosition(
+                _arrowPath.last.position,
+                _currentArrowState!.position,
+                0.0,
+              ) != _arrowPath.last.position; // Position changed
+          
+          if (shouldAddToPath) {
+            _arrowPath.add(_currentArrowState!);
+            
+            // Limit path length to prevent memory issues
+            if (_arrowPath.length > 100) {
+              _arrowPath.removeAt(0);
+            }
+          }
+        }
+        
+        if (mounted) {
+          setState(() {});
+        }
       }
+    } catch (e) {
+      debugPrint('Error updating arrow position: $e');
     }
-  }
-
-  // Callback for sensor errors from OptimizedSensorManager
-  void _onSensorError(String error) {
-    if (kDebugMode) {
-      debugPrint('Sensor Error: $error');
-    }
-    // Could show user notification here if needed
-    // ScaffoldMessenger.of(context).showSnackBar(
-    //   SnackBar(content: Text('Sensor issue: $error'), backgroundColor: Colors.orange)
-    // );
+    */
   }
 
   @override
@@ -597,20 +697,57 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                 ),
                 const SizedBox(height: 12),
                 ElevatedButton.icon(
-                  onPressed: _isCountingSteps ? null : () {
-                    // Safe step counting initialization
-                    setState(() {
-                      _isCountingSteps = true;
-                    });
-                    // TODO: Implement step counting logic
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Conteo de pasos iniciado')),
-                    );
+                  onPressed: () {
+                    if (_globalSensorManager == null) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Sensores no disponibles')),
+                      );
+                      return;
+                    }
+                    
+                    if (_globalSensorManager!.isRunning) {
+                      // Stop sensors and reset arrow
+                      _globalSensorManager!.stopSensors();
+                      setState(() {
+                        // _currentArrowState = null;
+                        // _arrowPath.clear();
+                        _arrowStartPosition = null;
+                      });
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Sensores detenidos')),
+                      );
+                    } else {
+                      // Start sensors and set arrow start position
+                      _globalSensorManager!.startSensors();
+                      
+                      // Set arrow start position to current position or map center
+                      if (startPoint != null) {
+                        _arrowStartPosition = startPoint;
+                      } else {
+                        // Default to map center if no start point selected
+                        _arrowStartPosition = LatLng(
+                          (startBounds.latitude + endBounds.latitude) / 2,
+                          (startBounds.longitude + endBounds.longitude) / 2,
+                        );
+                      }
+                      
+                      // Reset global sensor data for fresh start
+                      _globalSensorManager!.resetData();
+                      
+                      setState(() {
+                        // _currentArrowState = null;
+                        // _arrowPath.clear();
+                      });
+                      
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Sensores iniciados - Comience a caminar')),
+                      );
+                    }
                   },
-                  icon: const Icon(Icons.directions_walk),
-                  label: const Text("Iniciar"),
+                  icon: Icon(_globalSensorManager?.isRunning == true ? Icons.stop : Icons.directions_walk),
+                  label: Text(_globalSensorManager?.isRunning == true ? "Detener" : "Iniciar"),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.teal,
+                    backgroundColor: _globalSensorManager?.isRunning == true ? Colors.red : Colors.teal,
                     foregroundColor: Colors.white,
                     elevation: 3,
                   ),
@@ -1263,7 +1400,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                         },
                         child: RepaintBoundary(
                           child: _initContext.animationsEnabled
-                              ? OptimizedAnimatedPOIIcon()
+                              ? const Icon(Icons.info, color: Colors.deepPurpleAccent, size: 28) // OptimizedAnimatedPOIIcon()
                               : const Icon(Icons.info, color: Colors.deepPurpleAccent, size: 28),
                         ),
                       ),
@@ -1487,6 +1624,71 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
         ));
       }
       
+      // Add arrow path trail markers (if enabled) - DISABLED
+      /*
+      if (_arrowPath.isNotEmpty && _globalSensorManager?.isRunning == true) {
+        for (int i = 0; i < _arrowPath.length - 1; i++) {
+          final arrowState = _arrowPath[i];
+          if (arrowState.isVisible) {
+            markers.add(Marker(
+              point: arrowState.position,
+              width: 20,
+              height: 20,
+              child: RepaintBoundary(
+                child: Opacity(
+                  opacity: 0.4, // Trail markers are more transparent
+                  child: Transform.rotate(
+                    angle: arrowState.normalizedRotation * pi / 180,
+                    child: Icon(
+                      Icons.navigation,
+                      color: Colors.blueGrey,
+                      size: 16,
+                    ),
+                  ),
+                ),
+              ),
+            ));
+          }
+        }
+      }
+      */
+      
+      // Add current arrow marker (main position indicator) - DISABLED
+      /*
+      if (_currentArrowState != null && _currentArrowState!.isVisible) {
+        markers.add(Marker(
+          point: _currentArrowState!.position,
+          width: _currentArrowState!.size,
+          height: _currentArrowState!.size,
+          child: RepaintBoundary(
+            child: AnimatedOpacity(
+              opacity: _currentArrowState!.opacity,
+              duration: const Duration(milliseconds: 300),
+              child: AnimatedScale(
+                scale: _currentArrowState!.scale,
+                duration: const Duration(milliseconds: 200),
+                child: Transform.rotate(
+                  angle: _currentArrowState!.normalizedRotation * pi / 180,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.blue.withOpacity(0.2),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      Icons.navigation,
+                      color: Colors.blue,
+                      size: _currentArrowState!.size * 0.8,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ));
+      }
+      */
+      
+      // Legacy current position marker (fallback when no arrow state)
       if (_currentPosition != null && _initContext.sensorsAvailable) {
         markers.add(Marker(
           point: _currentPosition!,
