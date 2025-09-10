@@ -208,6 +208,9 @@ class ArrowState {
   final double confidence;      // Position confidence (0.0 to 1.0)
   final double scale;           // Arrow scale factor for size
   final PositionState positionState; // Underlying position data
+  final DateTime timestamp;     // When this arrow state was created
+  final double speed;           // Movement speed in m/s
+  final bool isTrailPoint;      // Whether this is part of the trail visualization
   
   const ArrowState({
     required this.position,
@@ -216,6 +219,9 @@ class ArrowState {
     required this.confidence,
     required this.scale,
     required this.positionState,
+    required this.timestamp,
+    this.speed = 0.0,
+    this.isTrailPoint = false,
   });
   
   /// Create an arrow state with default visibility hidden
@@ -227,6 +233,9 @@ class ArrowState {
       confidence: 0.0,
       scale: 1.0,
       positionState: PositionState.zero(),
+      timestamp: DateTime.now(),
+      speed: 0.0,
+      isTrailPoint: false,
     );
   }
   
@@ -236,6 +245,8 @@ class ArrowState {
     LatLng mapPosition, {
     double? customRotation,
     double scale = 1.0,
+    double speed = 0.0,
+    bool isTrailPoint = false,
   }) {
     final confidence = positionState.accuracy;
     final isVisible = confidence > 0.1; // Only show if we have some confidence
@@ -247,6 +258,9 @@ class ArrowState {
       confidence: confidence,
       scale: scale,
       positionState: positionState,
+      timestamp: DateTime.now(),
+      speed: speed,
+      isTrailPoint: isTrailPoint,
     );
   }
   
@@ -259,14 +273,42 @@ class ArrowState {
   /// Get arrow size based on confidence and scale
   double get size {
     if (!isVisible) return 0.0;
-    final baseSize = 40.0;
+    final baseSize = isTrailPoint ? 25.0 : 40.0; // Smaller for trail points
     final confidenceMultiplier = (confidence * 0.5 + 0.5).clamp(0.5, 1.0);
     return baseSize * scale * confidenceMultiplier;
   }
   
   /// Check if arrow should be animated
   bool get shouldAnimate {
-    return isVisible && confidence > 0.3;
+    return isVisible && confidence > 0.3 && !isTrailPoint;
+  }
+  
+  /// Get trail opacity based on age and confidence
+  double get trailOpacity {
+    if (!isTrailPoint || !isVisible) return 0.0;
+    
+    final age = DateTime.now().difference(timestamp).inSeconds;
+    final ageFactor = (1.0 - (age / 30.0)).clamp(0.0, 1.0); // Fade over 30 seconds
+    final baseOpacity = (confidence * 0.6 + 0.2).clamp(0.2, 0.8);
+    
+    return baseOpacity * ageFactor;
+  }
+  
+  /// Check if this arrow state is recent enough to display
+  bool get isRecent {
+    final age = DateTime.now().difference(timestamp).inSeconds;
+    return age < (isTrailPoint ? 60 : 10); // Trail points live longer
+  }
+  
+  /// Get movement velocity as a vector
+  Map<String, double> get velocityVector {
+    if (speed == 0.0) return {'vx': 0.0, 'vy': 0.0};
+    
+    final radians = rotation * pi / 180;
+    return {
+      'vx': speed * cos(radians),
+      'vy': speed * sin(radians),
+    };
   }
   
   /// Get normalized rotation (0-360 degrees)
@@ -299,6 +341,9 @@ class ArrowState {
     double? confidence,
     double? scale,
     PositionState? positionState,
+    DateTime? timestamp,
+    double? speed,
+    bool? isTrailPoint,
   }) {
     return ArrowState(
       position: position ?? this.position,
@@ -307,6 +352,9 @@ class ArrowState {
       confidence: confidence ?? this.confidence,
       scale: scale ?? this.scale,
       positionState: positionState ?? this.positionState,
+      timestamp: timestamp ?? this.timestamp,
+      speed: speed ?? this.speed,
+      isTrailPoint: isTrailPoint ?? this.isTrailPoint,
     );
   }
   
@@ -315,7 +363,8 @@ class ArrowState {
     return 'ArrowState(pos: ${position.latitude.toStringAsFixed(6)}, '
            '${position.longitude.toStringAsFixed(6)}, '
            'rotation: ${rotation.toStringAsFixed(1)}°, '
-           'visible: $isVisible, confidence: ${confidence.toStringAsFixed(2)})';
+           'visible: $isVisible, confidence: ${confidence.toStringAsFixed(2)}, '
+           'speed: ${speed.toStringAsFixed(2)}m/s, trail: $isTrailPoint)';
   }
   
   @override
@@ -327,7 +376,9 @@ class ArrowState {
           rotation == other.rotation &&
           isVisible == other.isVisible &&
           confidence == other.confidence &&
-          scale == other.scale;
+          scale == other.scale &&
+          speed == other.speed &&
+          isTrailPoint == other.isTrailPoint;
 
   @override
   int get hashCode =>
@@ -335,7 +386,9 @@ class ArrowState {
       rotation.hashCode ^
       isVisible.hashCode ^
       confidence.hashCode ^
-      scale.hashCode;
+      scale.hashCode ^
+      speed.hashCode ^
+      isTrailPoint.hashCode;
 }
 
 /// Grid coordinate conversion utilities

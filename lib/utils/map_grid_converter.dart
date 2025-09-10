@@ -105,35 +105,57 @@ class MapGridConverter {
   }
   
   /// Calculate the optimal arrow position on the map based on current position
-  ArrowState calculateArrowState(PositionState position, LatLng startMapPosition) {
+  ArrowState calculateArrowState(PositionState position, LatLng startMapPosition, {double? customSpeed}) {
     // Convert position to map coordinates
     final mapPosition = positionToLatLng(position, startMapPosition);
+    
+    // Validate that the position is within map bounds
+    if (!isWithinMapBounds(mapPosition)) {
+      return ArrowState.hidden(startMapPosition);
+    }
+    
+    // Calculate movement speed if not provided
+    final speed = customSpeed ?? 0.0;
     
     // Create arrow state with appropriate confidence and visibility
     return ArrowState.fromPosition(
       position,
       mapPosition,
       customRotation: position.angle,
-      scale: 1.0,
+      scale: ArrowAnimationHelper.calculateScaleFromSpeed(speed),
+      speed: speed,
+      isTrailPoint: false,
     );
   }
   
-  /// Create a path of arrow states from position history
-  List<ArrowState> createArrowPath(List<PositionState> positionHistory, LatLng startMapPosition) {
+  /// Create a path of arrow states from position history with trail management
+  List<ArrowState> createArrowPath(List<PositionState> positionHistory, LatLng startMapPosition, {int maxTrailPoints = 50}) {
     final arrowStates = <ArrowState>[];
     
     for (int i = 0; i < positionHistory.length; i++) {
       final position = positionHistory[i];
-      final arrowState = calculateArrowState(position, startMapPosition);
+      final mapPosition = positionToLatLng(position, startMapPosition);
       
-      // Adjust visibility based on position in history
-      final isRecent = i >= positionHistory.length - 10; // Show last 10 positions
-      final adjustedArrowState = arrowState.copyWith(
-        isVisible: isRecent && arrowState.isVisible,
-        scale: isRecent ? 1.0 : 0.7, // Smaller scale for older positions
+      // Skip if position is outside map bounds
+      if (!isWithinMapBounds(mapPosition)) continue;
+      
+      // Calculate speed for this position
+      final speed = 0.0; // Simplified for now
+      
+      final arrowState = ArrowState.fromPosition(
+        position,
+        mapPosition,
+        customRotation: position.angle,
+        scale: ArrowAnimationHelper.calculateScaleFromSpeed(speed),
+        speed: speed,
+        isTrailPoint: i < positionHistory.length - 1, // Only last position is not a trail point
       );
       
-      arrowStates.add(adjustedArrowState);
+      // Adjust visibility and opacity based on position in history
+      final isRecent = i >= positionHistory.length - maxTrailPoints;
+      if (isRecent && arrowState.isVisible) {
+        arrowStates.add(arrowState);
+      }
     }
     
     return arrowStates;
@@ -196,22 +218,55 @@ class MapGridConverter {
     };
   }
   
-  /// Generate debug information for troubleshooting
-  Map<String, dynamic> debugConversion(PositionState position, LatLng startMapPosition) {
+  /// Get arrow states for rendering (includes current arrow and trail)
+  Map<String, dynamic> getArrowRenderingData(ArrowState? currentArrow, List<ArrowState> trail) {
+    final validTrail = trail.where((state) => 
+      ArrowAnimationHelper.isValidForRendering(state) && state.isRecent
+    ).toList();
+    
+    return {
+      'currentArrow': currentArrow != null && ArrowAnimationHelper.isValidForRendering(currentArrow) ? currentArrow : null,
+      'trail': validTrail,
+      'trailCount': validTrail.length,
+      'hasValidArrow': currentArrow?.isVisible == true,
+    };
+  }
+  
+  /// Generate debug information for troubleshooting arrow movement
+  Map<String, dynamic> debugArrowConversion(PositionState position, LatLng startMapPosition, ArrowState? currentArrow) {
     final gridCoords = positionToGrid(position);
     final mapCoords = positionToLatLng(position, startMapPosition);
+    final arrowState = calculateArrowState(position, startMapPosition);
     
     return {
       'originalPosition': {
         'x': position.x,
         'y': position.y,
         'angle': position.angle,
+        'accuracy': position.accuracy,
       },
       'gridCoordinates': gridCoords,
       'mapCoordinates': {
         'latitude': mapCoords.latitude,
         'longitude': mapCoords.longitude,
+        'withinBounds': isWithinMapBounds(mapCoords),
       },
+      'arrowState': {
+        'position': '${arrowState.position.latitude}, ${arrowState.position.longitude}',
+        'rotation': arrowState.rotation,
+        'isVisible': arrowState.isVisible,
+        'confidence': arrowState.confidence,
+        'scale': arrowState.scale,
+        'speed': arrowState.speed,
+      },
+      'currentArrow': currentArrow != null ? {
+        'position': '${currentArrow.position.latitude}, ${currentArrow.position.longitude}',
+        'rotation': currentArrow.rotation,
+        'isVisible': currentArrow.isVisible,
+        'confidence': currentArrow.confidence,
+        'scale': currentArrow.scale,
+        'speed': currentArrow.speed,
+      } : null,
       'startMapPosition': {
         'latitude': startMapPosition.latitude,
         'longitude': startMapPosition.longitude,
@@ -223,7 +278,7 @@ class MapGridConverter {
 
 /// Utility class for arrow animation and movement calculations
 class ArrowAnimationHelper {
-  /// Calculate smooth rotation transition
+  /// Calculate smooth rotation transition with shortest path
   static double calculateSmoothRotation(double currentRotation, double targetRotation, double lerpFactor) {
     // Normalize angles to 0-360 range
     final current = (currentRotation % 360 + 360) % 360;
@@ -242,7 +297,7 @@ class ArrowAnimationHelper {
     return (newRotation % 360 + 360) % 360;
   }
   
-  /// Calculate smooth position transition
+  /// Calculate smooth position transition using linear interpolation
   static LatLng calculateSmoothPosition(LatLng currentPosition, LatLng targetPosition, double lerpFactor) {
     final latDiff = targetPosition.latitude - currentPosition.latitude;
     final lngDiff = targetPosition.longitude - currentPosition.longitude;
@@ -253,13 +308,25 @@ class ArrowAnimationHelper {
     );
   }
   
-  /// Calculate arrow scale based on movement speed
-  static double calculateScaleFromSpeed(double speed, {double minScale = 0.8, double maxScale = 1.2}) {
-    // Normalize speed to 0-1 range (assuming max speed of 2 m/s for walking)
-    final normalizedSpeed = (speed / 2.0).clamp(0.0, 1.0);
+  /// Calculate arrow scale based on movement speed with dynamic scaling
+  static double calculateScaleFromSpeed(double speed, {double minScale = 0.5, double maxScale = 2.0}) {
+    // Stationary: smaller scale (0.8)
+    // Walking (0.5-2.0 m/s): normal scale (1.0)
+    // Fast movement (>2.0 m/s): larger scale (1.3)
     
-    // Map to scale range
-    return minScale + (normalizedSpeed * (maxScale - minScale));
+    if (speed < 0.1) {
+      return 0.8; // Stationary
+    } else if (speed < 0.5) {
+      // Interpolate between stationary and walking
+      final factor = speed / 0.5;
+      return 0.8 + (factor * 0.2); // 0.8 to 1.0
+    } else if (speed <= 2.0) {
+      return 1.0; // Normal walking speed
+    } else {
+      // Fast movement - scale up to maxScale (but cap at 1.3 for visibility)
+      final factor = ((speed - 2.0) / 2.0).clamp(0.0, 1.0);
+      return 1.0 + (factor * 0.3); // 1.0 to 1.3
+    }
   }
   
   /// Calculate opacity based on position confidence and recency
@@ -274,5 +341,117 @@ class ArrowAnimationHelper {
     final opacity = confidence * ageFactor;
     
     return opacity.clamp(minOpacity, 1.0);
+  }
+  
+  /// Calculate smooth state transition for ArrowState
+  static ArrowState calculateSmoothState(
+    ArrowState currentState,
+    ArrowState targetState,
+    double lerpFactor,
+    double currentSpeed,
+  ) {
+    if (!currentState.isVisible || !targetState.isVisible) {
+      return targetState; // Use target state directly if visibility changed
+    }
+    
+    // Smooth position transition
+    final smoothPosition = calculateSmoothPosition(
+      currentState.position,
+      targetState.position,
+      lerpFactor,
+    );
+    
+    // Smooth rotation transition
+    final smoothRotation = calculateSmoothRotation(
+      currentState.rotation,
+      targetState.rotation,
+      0.4, // Slightly different lerp factor for rotation
+    );
+    
+    // Dynamic scale based on speed
+    final animatedScale = calculateScaleFromSpeed(currentSpeed);
+    
+    // Interpolate confidence
+    final smoothConfidence = currentState.confidence + 
+        ((targetState.confidence - currentState.confidence) * lerpFactor);
+    
+    return targetState.copyWith(
+      position: smoothPosition,
+      rotation: smoothRotation,
+      scale: animatedScale,
+      confidence: smoothConfidence,
+      speed: currentSpeed,
+    );
+  }
+  
+  /// Create trail point from arrow state
+  static ArrowState createTrailPoint(ArrowState arrowState) {
+    return arrowState.copyWith(
+      isTrailPoint: true,
+      scale: arrowState.scale * 0.7, // Smaller for trail
+      timestamp: DateTime.now(),
+    );
+  }
+  
+  /// Filter and manage arrow trail with maximum points
+  static List<ArrowState> manageArrowTrail(List<ArrowState> currentTrail, ArrowState newState, {int maxPoints = 100}) {
+    final updatedTrail = List<ArrowState>.from(currentTrail);
+    
+    // Add new trail point if position changed significantly
+    if (currentTrail.isEmpty || _hasSignificantMovement(currentTrail.last, newState)) {
+      updatedTrail.add(createTrailPoint(newState));
+    }
+    
+    // Remove old trail points
+    updatedTrail.removeWhere((state) => !state.isRecent);
+    
+    // Limit trail length
+    if (updatedTrail.length > maxPoints) {
+      updatedTrail.removeRange(0, updatedTrail.length - maxPoints);
+    }
+    
+    return updatedTrail;
+  }
+  
+  /// Check if there's significant movement between two arrow states
+  static bool _hasSignificantMovement(ArrowState state1, ArrowState state2, {double threshold = 0.5}) {
+    final distance = Distance();
+    final movementDistance = distance.as(LengthUnit.Meter, state1.position, state2.position);
+    return movementDistance >= threshold;
+  }
+  
+  /// Calculate interpolated arrow state for smooth animation frames
+  static ArrowState interpolateArrowState(ArrowState startState, ArrowState endState, double progress) {
+    final interpolatedPosition = calculateSmoothPosition(
+      startState.position,
+      endState.position,
+      progress,
+    );
+    
+    final interpolatedRotation = calculateSmoothRotation(
+      startState.rotation,
+      endState.rotation,
+      progress,
+    );
+    
+    final interpolatedScale = startState.scale + ((endState.scale - startState.scale) * progress);
+    final interpolatedConfidence = startState.confidence + ((endState.confidence - startState.confidence) * progress);
+    
+    return startState.copyWith(
+      position: interpolatedPosition,
+      rotation: interpolatedRotation,
+      scale: interpolatedScale,
+      confidence: interpolatedConfidence,
+    );
+  }
+  
+  /// Validate arrow state for rendering
+  static bool isValidForRendering(ArrowState arrowState) {
+    return arrowState.isVisible &&
+           arrowState.confidence > 0.1 &&
+           arrowState.position.latitude.isFinite &&
+           arrowState.position.longitude.isFinite &&
+           arrowState.rotation.isFinite &&
+           arrowState.scale > 0;
   }
 }

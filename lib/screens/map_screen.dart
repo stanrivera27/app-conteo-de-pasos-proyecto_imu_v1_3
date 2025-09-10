@@ -176,10 +176,10 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   bool showgraph = false;
   
   // Arrow positioning and animation
-  // ArrowState? _currentArrowState;
-  // late MapGridConverter _gridConverter;
+  ArrowState? _currentArrowState;
+  late MapGridConverter _gridConverter;
   LatLng? _arrowStartPosition;
-  // List<ArrowState> _arrowPath = [];
+  List<ArrowState> _arrowPath = [];
   Timer? _arrowUpdateTimer;
 
   //para cuadros de texto
@@ -349,12 +349,12 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   
   Future<void> _initializeGridConverter() async {
     try {
-      // _gridConverter = MapGridConverter(
-      //   startBounds: startBounds,
-      //   endBounds: endBounds,
-      //   fixedRows: numRows,
-      // );
-      debugPrint('Grid converter initialization skipped (not implemented)');
+      _gridConverter = MapGridConverter(
+        startBounds: startBounds,
+        endBounds: endBounds,
+        fixedRows: numRows,
+      );
+      debugPrint('Grid converter initialized successfully');
     } catch (e) {
       _initContext.addError('Grid converter initialization failed: $e');
       debugPrint('WARNING: Grid converter initialization failed: $e');
@@ -510,8 +510,6 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   
   // Update arrow position based on global sensor data
   void _updateArrowPosition() {
-    // Temporary disabled - requires ArrowState and MapGridConverter implementation
-    /*
     if (_globalSensorManager == null || !_globalSensorManager!.isRunning || _arrowStartPosition == null) {
       return;
     }
@@ -524,57 +522,30 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
         final newArrowState = _gridConverter.calculateArrowState(
           positionState,
           _arrowStartPosition!,
+          customSpeed: _globalSensorManager!.currentSpeed,
         );
         
         // Apply smooth transition if there's a previous arrow state
         if (_currentArrowState != null && newArrowState.isVisible) {
-          // Smooth position transition
-          final smoothPosition = ArrowAnimationHelper.calculateSmoothPosition(
-            _currentArrowState!.position,
-            newArrowState.position,
+          // Use smooth state calculation from ArrowAnimationHelper
+          _currentArrowState = ArrowAnimationHelper.calculateSmoothState(
+            _currentArrowState!,
+            newArrowState,
             0.3, // Lerp factor for smooth movement
-          );
-          
-          // Smooth rotation transition
-          final smoothRotation = ArrowAnimationHelper.calculateSmoothRotation(
-            _currentArrowState!.rotation,
-            newArrowState.rotation,
-            0.4, // Lerp factor for rotation
-          );
-          
-          // Calculate scale based on movement speed
-          final currentSpeed = _globalSensorManager!.currentSpeed;
-          final animatedScale = ArrowAnimationHelper.calculateScaleFromSpeed(currentSpeed);
-          
-          // Create smoothed arrow state
-          _currentArrowState = newArrowState.copyWith(
-            position: smoothPosition,
-            rotation: smoothRotation,
-            scale: animatedScale,
+            _globalSensorManager!.currentSpeed,
           );
         } else {
           // First arrow or not visible, use direct state
           _currentArrowState = newArrowState;
         }
         
-        // Add to arrow path for trail visualization
+        // Manage arrow path for trail visualization
         if (_currentArrowState != null && _currentArrowState!.isVisible) {
-          // Only add to path if position has changed significantly
-          final shouldAddToPath = _arrowPath.isEmpty ||
-              ArrowAnimationHelper.calculateSmoothPosition(
-                _arrowPath.last.position,
-                _currentArrowState!.position,
-                0.0,
-              ) != _arrowPath.last.position; // Position changed
-          
-          if (shouldAddToPath) {
-            _arrowPath.add(_currentArrowState!);
-            
-            // Limit path length to prevent memory issues
-            if (_arrowPath.length > 100) {
-              _arrowPath.removeAt(0);
-            }
-          }
+          _arrowPath = ArrowAnimationHelper.manageArrowTrail(
+            _arrowPath,
+            _currentArrowState!,
+            maxPoints: 100,
+          );
         }
         
         if (mounted) {
@@ -584,7 +555,6 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     } catch (e) {
       debugPrint('Error updating arrow position: $e');
     }
-    */
   }
 
   @override
@@ -709,8 +679,8 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                       // Stop sensors and reset arrow
                       _globalSensorManager!.stopSensors();
                       setState(() {
-                        // _currentArrowState = null;
-                        // _arrowPath.clear();
+                        _currentArrowState = null;
+                        _arrowPath.clear();
                         _arrowStartPosition = null;
                       });
                       ScaffoldMessenger.of(context).showSnackBar(
@@ -735,8 +705,8 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                       _globalSensorManager!.resetData();
                       
                       setState(() {
-                        // _currentArrowState = null;
-                        // _arrowPath.clear();
+                        _currentArrowState = null;
+                        _arrowPath.clear();
                       });
                       
                       ScaffoldMessenger.of(context).showSnackBar(
@@ -1425,6 +1395,12 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
               markers: _buildSafeMarkers(),
             ),
           ),
+
+          // Arrow layer for movement tracking (ARROW LAYER)
+          if (_globalSensorManager?.isRunning == true)
+            RepaintBoundary(
+              child: _buildArrowLayer(),
+            ),
         ],
       );
     } catch (e) {
@@ -1908,6 +1884,71 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     } catch (e) {
       debugPrint('Error showing diagnostic info: $e');
     }
+  }
+  
+  /// Build arrow layer for movement tracking
+  Widget _buildArrowLayer() {
+    try {
+      final renderingData = _gridConverter.getArrowRenderingData(_currentArrowState, _arrowPath);
+      final currentArrow = renderingData['currentArrow'] as ArrowState?;
+      final trail = renderingData['trail'] as List<ArrowState>;
+      
+      final markers = <Marker>[];
+      
+      // Add trail markers (older positions)
+      for (final trailState in trail) {
+        if (ArrowAnimationHelper.isValidForRendering(trailState)) {
+          markers.add(_buildArrowMarker(trailState, isTrailPoint: true));
+        }
+      }
+      
+      // Add current arrow marker (most recent position)
+      if (currentArrow != null && ArrowAnimationHelper.isValidForRendering(currentArrow)) {
+        markers.add(_buildArrowMarker(currentArrow, isTrailPoint: false));
+      }
+      
+      return MarkerLayer(markers: markers);
+    } catch (e) {
+      debugPrint('Error building arrow layer: $e');
+      return MarkerLayer(markers: []);
+    }
+  }
+  
+  /// Build individual arrow marker
+  Marker _buildArrowMarker(ArrowState arrowState, {required bool isTrailPoint}) {
+    return Marker(
+      point: arrowState.position,
+      width: arrowState.size,
+      height: arrowState.size,
+      child: AnimatedOpacity(
+        opacity: isTrailPoint ? arrowState.trailOpacity : arrowState.opacity,
+        duration: const Duration(milliseconds: 200),
+        child: Transform.rotate(
+          angle: arrowState.rotation * pi / 180,
+          child: AnimatedContainer(
+            duration: Duration(milliseconds: isTrailPoint ? 100 : 300),
+            child: AnimatedScale(
+              scale: arrowState.scale,
+              duration: Duration(milliseconds: isTrailPoint ? 100 : 200),
+              child: Icon(
+                isTrailPoint ? Icons.circle : Icons.navigation,
+                color: isTrailPoint 
+                    ? Colors.blue.withOpacity(0.6)
+                    : Colors.blue,
+                size: isTrailPoint ? 12 : 30,
+                shadows: [
+                  Shadow(
+                    offset: const Offset(1, 1),
+                    blurRadius: 2,
+                    color: Colors.black.withOpacity(0.3),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
   
 
