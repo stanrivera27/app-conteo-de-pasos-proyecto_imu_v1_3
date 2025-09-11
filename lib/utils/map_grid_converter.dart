@@ -105,7 +105,7 @@ class MapGridConverter {
   }
   
   /// Calculate the optimal arrow position on the map based on current position
-  ArrowState calculateArrowState(PositionState position, LatLng startMapPosition, {double? customSpeed}) {
+  ArrowState calculateArrowState(PositionState position, LatLng startMapPosition, {double? customSpeed, double? compassAngle}) {
     // Convert position to map coordinates
     final mapPosition = positionToLatLng(position, startMapPosition);
     
@@ -117,11 +117,17 @@ class MapGridConverter {
     // Calculate movement speed if not provided
     final speed = customSpeed ?? 0.0;
     
+    // Use compass angle if provided, otherwise use position angle
+    // Convert compass angle from radians to degrees if needed
+    final rotationAngle = compassAngle != null 
+        ? (compassAngle * 180 / pi) // Convert radians to degrees
+        : position.angle;
+    
     // Create arrow state with appropriate confidence and visibility
     return ArrowState.fromPosition(
       position,
       mapPosition,
-      customRotation: position.angle,
+      customRotation: rotationAngle,
       scale: ArrowAnimationHelper.calculateScaleFromSpeed(speed),
       speed: speed,
       isTrailPoint: false,

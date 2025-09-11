@@ -518,11 +518,12 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
       final positionState = _globalSensorManager!.positionState;
       
       if (positionState.isValid && positionState.accuracy > 0.1) {
-        // Calculate new arrow state with smooth animation
+        // Calculate new arrow state with smooth animation and compass data
         final newArrowState = _gridConverter.calculateArrowState(
           positionState,
           _arrowStartPosition!,
           customSpeed: _globalSensorManager!.currentSpeed,
+          compassAngle: _deviceAngle, // Add compass properties to small arrow
         );
         
         // Apply smooth transition if there's a previous arrow state
@@ -678,6 +679,12 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                     if (_globalSensorManager!.isRunning) {
                       // Stop sensors and reset arrow
                       _globalSensorManager!.stopSensors();
+                      
+                      // Stop compass tracking
+                      _accelSub?.cancel();
+                      _magSub?.cancel();
+                      _compassUpdateTimer?.cancel();
+                      
                       setState(() {
                         _currentArrowState = null;
                         _arrowPath.clear();
@@ -689,6 +696,9 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                     } else {
                       // Start sensors and set arrow start position
                       _globalSensorManager!.startSensors();
+                      
+                      // Start compass tracking for small arrow orientation
+                      _startCompassTracking();
                       
                       // Set arrow start position to current position or map center
                       if (startPoint != null) {
@@ -1664,7 +1674,9 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
       }
       */
       
-      // Legacy current position marker (fallback when no arrow state)
+      // Legacy current position marker (fallback when no arrow state) - REMOVED
+      // Large blue arrow removed as requested by user
+      /*
       if (_currentPosition != null && _initContext.sensorsAvailable) {
         markers.add(Marker(
           point: _currentPosition!,
@@ -1682,6 +1694,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
           ),
         ));
       }
+      */
       
       return markers;
     } catch (e) {
