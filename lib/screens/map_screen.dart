@@ -32,6 +32,11 @@ import '../utils/performance_monitor.dart';
 import '../utils/map_grid_converter.dart';
 import '../models/sensor_states.dart';
 
+// Orientation cone widgets
+import '../widgets/orientation/orientation_arrow_widget.dart';
+import '../widgets/orientation/orientation_cone_config.dart';
+import '../widgets/orientation/cone_path_cache.dart';
+
 // Importación para navegación
 import 'home_screen.dart';
 
@@ -190,10 +195,18 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   // Map initialization context
   final MapInitializationContext _initContext = MapInitializationContext();
   bool _mapInitializationFailed = false;
+  
+  // Orientation cone configuration
+  late OrientationConeConfig _coneConfig;
+  bool _showOrientationCone = true; // User preference for showing cone
 
   @override
   void initState() {
     super.initState();
+    
+    // Initialize orientation cone configuration
+    _coneConfig = OrientationConeConfig.light(); // Default to light theme
+    
     _initializeMapComponents();
   }
   
@@ -482,6 +495,9 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
       BackgroundProcessor.instance.dispose();
       PerformanceMonitor.instance.dispose();
       
+      // Cleanup orientation cone cache
+      ConePathCache.clearCache();
+      
       // Dispose shared animation controller
       // OptimizedAnimatedPOIIcon.disposeSharedController();
     } catch (e) {
@@ -564,6 +580,65 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
       appBar: AppBar(
         title: const Text('Planta 3 FIET - PSNEOPEC'),
         actions: [
+          // Orientation cone toggle button
+          IconButton(
+            onPressed: _toggleOrientationCone,
+            icon: Icon(
+              _showOrientationCone ? Icons.explore : Icons.explore_off,
+              color: _showOrientationCone ? Colors.blue : Colors.grey,
+            ),
+            tooltip: _showOrientationCone 
+                ? 'Desactivar cono de orientación' 
+                : 'Activar cono de orientación',
+          ),
+          // Cone theme selector
+          PopupMenuButton<String>(
+            onSelected: _switchConeTheme,
+            icon: const Icon(Icons.palette),
+            tooltip: 'Tema del cono de orientación',
+            itemBuilder: (BuildContext context) => [
+              const PopupMenuItem(
+                value: 'light',
+                child: Row(
+                  children: [
+                    Icon(Icons.light_mode, size: 20),
+                    SizedBox(width: 8),
+                    Text('Claro'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'dark',
+                child: Row(
+                  children: [
+                    Icon(Icons.dark_mode, size: 20),
+                    SizedBox(width: 8),
+                    Text('Oscuro'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'high_contrast',
+                child: Row(
+                  children: [
+                    Icon(Icons.contrast, size: 20),
+                    SizedBox(width: 8),
+                    Text('Alto contraste'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'performance',
+                child: Row(
+                  children: [
+                    Icon(Icons.speed, size: 20),
+                    SizedBox(width: 8),
+                    Text('Rendimiento'),
+                  ],
+                ),
+              ),
+            ],
+          ),
           IconButton(
             onPressed: () {
               Navigator.push(
@@ -940,6 +1015,77 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
           duration: const Duration(seconds: 2),
         ),
       );
+    }
+  }
+  
+  /// Toggle orientation cone visibility
+  void _toggleOrientationCone() {
+    try {
+      setState(() {
+        _showOrientationCone = !_showOrientationCone;
+      });
+      
+      _showUserMessage(
+        _showOrientationCone 
+            ? 'Cono de orientación activado' 
+            : 'Cono de orientación desactivado',
+        _showOrientationCone ? Colors.green : Colors.orange,
+      );
+    } catch (e) {
+      debugPrint('Error toggling orientation cone: $e');
+      _showUserMessage('Error al cambiar configuración del cono', Colors.red);
+    }
+  }
+  
+  /// Update cone configuration based on theme or user preference
+  void _updateConeConfiguration({OrientationConeConfig? newConfig}) {
+    try {
+      final config = newConfig ?? OrientationConeConfig.light();
+      
+      // Validate configuration before applying
+      if (!config.isValid()) {
+        debugPrint('Invalid cone configuration provided, using default');
+        _coneConfig = OrientationConeConfig.light();
+      } else {
+        _coneConfig = config;
+      }
+      
+      setState(() {});
+      
+      // Trigger cache validation for new configuration
+      ConePathCache.validateCache();
+    } catch (e) {
+      debugPrint('Error updating cone configuration: $e');
+      // Fallback to default configuration
+      _coneConfig = OrientationConeConfig.light();
+      _showUserMessage('Error en configuración, usando valores por defecto', Colors.orange);
+    }
+  }
+  
+  /// Switch cone theme (light/dark/high contrast)
+  void _switchConeTheme(String theme) {
+    try {
+      late OrientationConeConfig newConfig;
+      
+      switch (theme.toLowerCase()) {
+        case 'dark':
+          newConfig = OrientationConeConfig.dark();
+          break;
+        case 'high_contrast':
+          newConfig = OrientationConeConfig.highContrast();
+          break;
+        case 'performance':
+          newConfig = OrientationConeConfig.performance();
+          break;
+        default:
+          newConfig = OrientationConeConfig.light();
+      }
+      
+      _updateConeConfiguration(newConfig: newConfig);
+      _showUserMessage('Tema del cono cambiado a: $theme', Colors.blue);
+    } catch (e) {
+      debugPrint('Error switching cone theme: $e');
+      _showUserMessage('Error al cambiar tema del cono', Colors.red);
     }
   }
   
@@ -1927,36 +2073,98 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     }
   }
   
-  /// Build individual arrow marker
+  /// Build individual arrow marker with orientation cone
   Marker _buildArrowMarker(ArrowState arrowState, {required bool isTrailPoint}) {
+    try {
+      // Validate arrow state
+      if (!_validateArrowState(arrowState)) {
+        debugPrint('Invalid arrow state detected, using fallback');
+        return _buildFallbackMarker(arrowState, isTrailPoint);
+      }
+      
+      // Determine appropriate widget size considering cone extension
+      final markerSize = arrowState.size * (isTrailPoint ? 1.2 : 1.5);
+      
+      return Marker(
+        point: arrowState.position,
+        width: markerSize,
+        height: markerSize,
+        child: RepaintBoundary(
+          child: _showOrientationCone 
+              ? OrientationArrowHelper.createArrowWidget(
+                  arrowState: arrowState,
+                  deviceAngle: _deviceAngle,
+                  isTrailPoint: isTrailPoint,
+                  config: _coneConfig,
+                  forcePerformanceMode: isTrailPoint || arrowState.confidence < 0.3,
+                )
+              : _buildLegacyArrowWidget(arrowState, isTrailPoint),
+        ),
+      );
+    } catch (e) {
+      debugPrint('Error building arrow marker: $e');
+      return _buildFallbackMarker(arrowState, isTrailPoint);
+    }
+  }
+  
+  /// Validate arrow state for safe rendering
+  bool _validateArrowState(ArrowState arrowState) {
+    try {
+      return arrowState.position.latitude.isFinite &&
+             arrowState.position.longitude.isFinite &&
+             arrowState.rotation.isFinite &&
+             arrowState.scale > 0 &&
+             arrowState.scale.isFinite &&
+             arrowState.confidence >= 0 &&
+             arrowState.confidence <= 1 &&
+             arrowState.size > 0;
+    } catch (e) {
+      debugPrint('Error validating arrow state: $e');
+      return false;
+    }
+  }
+  
+  /// Build fallback marker for error cases
+  Marker _buildFallbackMarker(ArrowState arrowState, bool isTrailPoint) {
     return Marker(
       point: arrowState.position,
-      width: arrowState.size,
-      height: arrowState.size,
-      child: AnimatedOpacity(
-        opacity: isTrailPoint ? arrowState.trailOpacity : arrowState.opacity,
-        duration: const Duration(milliseconds: 200),
-        child: Transform.rotate(
-          angle: arrowState.rotation * pi / 180,
-          child: AnimatedContainer(
-            duration: Duration(milliseconds: isTrailPoint ? 100 : 300),
-            child: AnimatedScale(
-              scale: arrowState.scale,
-              duration: Duration(milliseconds: isTrailPoint ? 100 : 200),
-              child: Icon(
-                isTrailPoint ? Icons.circle : Icons.navigation,
-                color: isTrailPoint 
-                    ? Colors.blue.withOpacity(0.6)
-                    : Colors.blue,
-                size: isTrailPoint ? 12 : 30,
-                shadows: [
-                  Shadow(
-                    offset: const Offset(1, 1),
-                    blurRadius: 2,
-                    color: Colors.black.withOpacity(0.3),
-                  ),
-                ],
-              ),
+      width: 30,
+      height: 30,
+      child: Icon(
+        isTrailPoint ? Icons.circle : Icons.navigation,
+        color: isTrailPoint 
+            ? Colors.grey.withOpacity(0.6)
+            : Colors.blue.withOpacity(0.7),
+        size: isTrailPoint ? 8 : 20,
+      ),
+    );
+  }
+  
+  /// Build legacy arrow widget (fallback without cone)
+  Widget _buildLegacyArrowWidget(ArrowState arrowState, bool isTrailPoint) {
+    return AnimatedOpacity(
+      opacity: isTrailPoint ? arrowState.trailOpacity : arrowState.opacity,
+      duration: const Duration(milliseconds: 200),
+      child: Transform.rotate(
+        angle: arrowState.rotation * pi / 180,
+        child: AnimatedContainer(
+          duration: Duration(milliseconds: isTrailPoint ? 100 : 300),
+          child: AnimatedScale(
+            scale: arrowState.scale,
+            duration: Duration(milliseconds: isTrailPoint ? 100 : 200),
+            child: Icon(
+              isTrailPoint ? Icons.circle : Icons.navigation,
+              color: isTrailPoint 
+                  ? Colors.blue.withOpacity(0.6)
+                  : Colors.blue,
+              size: isTrailPoint ? 12 : 30,
+              shadows: [
+                Shadow(
+                  offset: const Offset(1, 1),
+                  blurRadius: 2,
+                  color: Colors.black.withOpacity(0.3),
+                ),
+              ],
             ),
           ),
         ),
