@@ -23,7 +23,7 @@ class SensorManager {
   bool isRunning = false;
   int sampleCount = 0;
 
-  final Duration sensorInterval = const Duration(microseconds: 8000); // 80 Hz
+  final Duration sensorInterval = const Duration(microseconds: 8000); // 125 Hz (1/8000 seconds = 125 Hz)
   StreamSubscription<AccelerometerEvent>? _accSubscription;
   StreamSubscription<GyroscopeEvent>? _gyroSubscription;
   StreamSubscription<CompassEvent>?

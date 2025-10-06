@@ -26,7 +26,7 @@ class OptimizedSensorManager {
   int sampleCount = 0;
 
   // Intervalos optimizados para mejor rendimiento
-  final Duration sensorInterval = const Duration(microseconds: 10000); // 100 Hz optimizado
+  final Duration sensorInterval = const Duration(microseconds: 8000); // 125 Hz
   StreamSubscription<AccelerometerEvent>? _accSubscription;
   StreamSubscription<GyroscopeEvent>? _gyroSubscription;
   StreamSubscription<CompassEvent>? _compassSubscription;

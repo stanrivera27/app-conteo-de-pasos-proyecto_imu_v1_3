@@ -1334,14 +1334,14 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   Timer? _compassUpdateTimer;
   void _startCompassTracking() {
     _accelSub = accelerometerEventStream(
-      samplingPeriod: const Duration(milliseconds: 50), // Reduced frequency
+      samplingPeriod: const Duration(microseconds: 8000), // 125 Hz
     ).listen((AccelerometerEvent event) {
       _accelData = event;
       _throttledUpdateDeviceAngle();
     });
 
     _magSub = magnetometerEventStream(
-      samplingPeriod: const Duration(milliseconds: 50), // Reduced frequency
+      samplingPeriod: const Duration(microseconds: 8000), // 125 Hz
     ).listen((MagnetometerEvent event) {
       _magData = event;
       _throttledUpdateDeviceAngle();
